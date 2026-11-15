@@ -1,5 +1,5 @@
 /**
- * Player types for Music Assistant Sendspin players
+ * Player type for Music Assistant players
  */
 
 export interface Player {
@@ -13,18 +13,4 @@ export interface Player {
   group_childs?: string[];
   synced_to?: string;
   can_sync_with?: string[];
-}
-
-export interface PlayerGroup {
-  group_id: string;
-  name: string;
-  members: string[];
-  leader: string;
-}
-
-export interface PlayerState {
-  players: Player[];
-  selectedPlayers: string[];
-  loading: boolean;
-  error: string | null;
 }

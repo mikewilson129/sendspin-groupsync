@@ -48,11 +48,13 @@ export class MAWebSocketClient {
   private initialized = false;
   private authenticated = false;
   private accessToken: string | null = null;
+  /** True when the socket dropped while signed in, so the next connection must sign in again */
+  private reauthOnReconnect = false;
 
   /**
    * Connect to Music Assistant server
    */
-  async connect(serverUrl: string): Promise<void> {
+  async connect(serverUrl: string, isReconnect = false): Promise<void> {
     this.serverUrl = serverUrl;
     this.shouldReconnect = true;
     this.reconnectAttempts = 0;
@@ -88,8 +90,21 @@ export class MAWebSocketClient {
                 console.log('[MA] Server info:', this.serverInfo);
                 clearTimeout(connectionTimeout);
                 this.reconnectAttempts = 0;
-                this.connectionHandlers.forEach((handler) => handler());
-                resolve();
+                const finish = () => {
+                  this.connectionHandlers.forEach((handler) => handler());
+                  resolve();
+                };
+                if (isReconnect && this.reauthOnReconnect) {
+                  // A new socket starts signed out. Sign it back in before anything else
+                  // sends commands, or every command fails with "Authentication is required".
+                  this.reauthOnReconnect = false;
+                  this.authenticateWithToken()
+                    .then((ok) => console.log('[MA] Re-authenticated after reconnect:', ok))
+                    .catch(() => undefined)
+                    .finally(finish);
+                } else {
+                  finish();
+                }
                 return;
               }
             } catch {
@@ -112,6 +127,8 @@ export class MAWebSocketClient {
         this.ws.onclose = () => {
           console.log('[MA] Disconnected');
           this.initialized = false;
+          if (this.authenticated) this.reauthOnReconnect = true;
+          this.authenticated = false;
           this.disconnectionHandlers.forEach((handler) => handler());
           this.attemptReconnect();
         };
@@ -127,6 +144,8 @@ export class MAWebSocketClient {
   disconnect(): void {
     this.shouldReconnect = false;
     this.initialized = false;
+    this.authenticated = false;
+    this.reauthOnReconnect = false;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -164,7 +183,7 @@ export class MAWebSocketClient {
    * Authenticate with username and password
    */
   async login(username: string, password: string): Promise<void> {
-    const result = await this.sendCommand<AuthResult>('auth/login', {
+    const result = await this.sendRaw<AuthResult>('auth/login', {
       username,
       password,
       device_name: 'GroupSync',
@@ -174,7 +193,7 @@ export class MAWebSocketClient {
     console.log('[MA] Got access token, authenticating session...');
 
     // Now authenticate the session with the token
-    await this.sendCommand('auth', {
+    await this.sendRaw('auth', {
       token: this.accessToken,
       device_name: 'GroupSync',
     });
@@ -200,7 +219,7 @@ export class MAWebSocketClient {
     }
 
     try {
-      await this.sendCommand('auth', {
+      await this.sendRaw('auth', {
         token: tokenToUse,
         device_name: 'GroupSync',
       });
@@ -250,9 +269,34 @@ export class MAWebSocketClient {
   }
 
   /**
-   * Send a command and wait for response
+   * Send a command and wait for response. If Music Assistant says this session is signed
+   * out (for example after a silent reconnect), sign in again with the saved token and
+   * retry once.
    */
   async sendCommand<T = unknown>(
+    command: string,
+    args: Record<string, unknown> = {},
+    timeoutMs = 10000
+  ): Promise<T> {
+    try {
+      return await this.sendRaw<T>(command, args, timeoutMs);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      const signedOut = /authentication is required/i.test(text);
+      if (signedOut && command !== 'auth' && command !== 'auth/login') {
+        this.authenticated = false;
+        if (await this.authenticateWithToken()) {
+          return this.sendRaw<T>(command, args, timeoutMs);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Send one command with no sign-in handling
+   */
+  private async sendRaw<T = unknown>(
     command: string,
     args: Record<string, unknown> = {},
     timeoutMs = 10000
@@ -496,7 +540,7 @@ export class MAWebSocketClient {
 
     setTimeout(() => {
       if (this.shouldReconnect && this.serverUrl) {
-        this.connect(this.serverUrl).catch((error) => {
+        this.connect(this.serverUrl, true).catch((error) => {
           console.error('[MA] Reconnect failed:', error);
         });
       }

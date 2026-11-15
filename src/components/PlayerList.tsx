@@ -8,7 +8,7 @@ export function PlayerList() {
 
   const handleStartCalibration = () => {
     if (selectedPlayerIds.length > 0) {
-      setPhase('instructions');
+      setPhase('calibrating');
     }
   };
 

@@ -3,7 +3,6 @@ import { persist } from 'zustand/middleware';
 
 interface ConnectionState {
   serverUrl: string;
-  sendspinUrl: string;  // Optional separate URL for Sendspin clock sync
   connected: boolean;
   connecting: boolean;
   error: string | null;
@@ -12,7 +11,6 @@ interface ConnectionState {
 
 interface ConnectionActions {
   setServerUrl: (url: string) => void;
-  setSendspinUrl: (url: string) => void;
   setConnected: (connected: boolean) => void;
   setConnecting: (connecting: boolean) => void;
   setError: (error: string | null) => void;
@@ -22,7 +20,6 @@ interface ConnectionActions {
 
 const initialState: ConnectionState = {
   serverUrl: '',
-  sendspinUrl: '',
   connected: false,
   connecting: false,
   error: null,
@@ -35,8 +32,6 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>()(
       ...initialState,
 
       setServerUrl: (url) => set({ serverUrl: url }),
-
-      setSendspinUrl: (url) => set({ sendspinUrl: url }),
 
       setConnected: (connected) => set({ connected, connecting: false }),
 
@@ -56,7 +51,6 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>()(
       name: 'groupsync-connection',
       partialize: (state) => ({
         serverUrl: state.serverUrl,
-        sendspinUrl: state.sendspinUrl,
         recentServers: state.recentServers,
       }),
     }

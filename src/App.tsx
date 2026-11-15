@@ -1,7 +1,7 @@
 import { useConnectionStore, useCalibrationStore } from './store';
 import { ConnectionPanel } from './components/ConnectionPanel';
 import { PlayerList } from './components/PlayerList';
-import { CalibrationWizard } from './components/CalibrationWizard';
+import { GroupCalibration } from './components/GroupCalibration';
 
 function App() {
   const { connected } = useConnectionStore();
@@ -29,7 +29,7 @@ function App() {
         ) : phase === 'idle' || phase === 'selecting' ? (
           <PlayerList />
         ) : (
-          <CalibrationWizard />
+          <GroupCalibration />
         )}
       </main>
 

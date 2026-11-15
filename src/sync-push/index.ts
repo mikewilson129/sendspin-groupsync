@@ -1,2 +1,2 @@
-export { pushSyncOffsets, createSyncOffsetPusher, syncOffsetPusher } from './SyncOffsetPusher';
-export type { PushResult, PushOptions } from './SyncOffsetPusher';
+export { planDelays, applyDelays, readDelaySetting } from './DelayApplier';
+export type { DelayPlanRow, DelaySetting, ApplyResult } from './DelayApplier';
