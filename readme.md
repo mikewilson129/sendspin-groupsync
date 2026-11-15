@@ -48,6 +48,7 @@ Open the HTTPS address it prints on your phone, enter your Music Assistant addre
 - **Leftover groups cause trouble.** A group made by selecting players in the Music Assistant app can pull speakers away from the group the app builds. The app takes chosen speakers out of such groups when it starts. Tick "I already grouped these players in Music Assistant" to keep your own group instead.
 - **Bluetooth speakers read less steadily.** They can add hundreds of milliseconds of delay, which the app corrects, but their timing can wobble. If a reading is marked unsteady, measure again.
 - **Some players report "not playing" while audible.** The app shows this as a grey note, not an error.
+- **TVs reached over AirPlay may not cope with 24-bit music.** A Roku TV added through AirPlay played static whenever 24-bit (hi-res) music was sent to it on its own. Turning off the 24-bit option in that player's audio settings in Music Assistant fixed it. The cause was not confirmed; it may be the TV or the speakers behind it. GroupSync's own test track is 16-bit, so it does not show this problem.
 - **Players with no delay setting in Music Assistant** cannot be changed. The others are moved to match them, and the review screen lists what cannot be fixed.
 
 ## Project layout
