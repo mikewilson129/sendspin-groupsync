@@ -1,203 +1,75 @@
 # CLAUDE.md - Developer Guidance for GroupSync
 
-This file provides context for AI assistants (Claude, Copilot, etc.) working on this codebase.
+This file gives AI assistants context for working on this codebase. Keep it in step with the code.
 
-## Project Purpose
+## Project purpose
 
-GroupSync is a mobile web app for synchronizing multiple Sendspin audio players. It measures speaker offset by playing a calibration track and listening via the device microphone, then pushes calculated offsets to each player.
+GroupSync is a mobile web app that lines up the timing of Sendspin speakers in Music Assistant (MA). It plays a chirp track on all chosen speakers as one sync group, measures each speaker with the phone microphone, and saves new delay settings through the MA API.
 
-## Key Concepts
+It does not talk to players directly and it does not speak the Sendspin protocol. Everything goes through the MA WebSocket API.
 
-### Sendspin Protocol
-- WebSocket-based synchronized audio streaming protocol
-- Players connect to Music Assistant server at `ws://host:port/sendspin`
-- Clock synchronization via NTP-style `client/time` / `server/time` messages
-- Audio chunks include server timestamps (microseconds)
-- Players apply sync delay to compensate for hardware latency
+## How a calibration run works
 
-### Sync Offset
-- **Static delay**: User-configurable offset in milliseconds
-- **Positive value**: Delays playback (plays later)
-- **Negative value**: Advances playback (plays earlier)
-- Used to compensate for speaker distance, hardware latency, network jitter
+1. `GroupSyncSession.start()` unmutes the chosen players, builds one sync group led by the reference speaker (`groupPlayers()`), and plays the chirp track on it.
+2. `GroupSyncSession.measure(id)` mutes the other players, waits for the mute to land, records with `MicCapture`, and runs `analyzeClicks` on the recording.
+3. `solveOffsets()` combines every measurement into an offset per player relative to the reference.
+4. `planDelays()` in `src/sync-push/DelayApplier.ts` turns offsets into new values for each player's MA delay setting. `applyDelays()` saves them with `config/players/save`.
 
-### Cross-Correlation
-- Algorithm to find time offset between two signals
-- Compare expected click waveform to recorded audio
-- Peak in correlation indicates sample offset
-- Convert samples to milliseconds: `offsetMs = (samples * 1000) / sampleRate`
+More detail is in `docs/HOW_IT_WORKS.md`.
 
-## Architecture Overview
+## Code map
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GroupSync Web App                        │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │ Connection  │  │ Calibration │  │ Offset Push         │ │
-│  │ Panel       │  │ Wizard      │  │                     │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘ │
-│         │                │                     │            │
-│  ┌──────▼──────┐  ┌──────▼──────┐  ┌──────────▼──────────┐ │
-│  │ MA Client   │  │ Audio       │  │ Sync Offset         │ │
-│  │ (WebSocket) │  │ Detector    │  │ Pusher              │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘ │
-└─────────┼────────────────┼────────────────────┼────────────┘
-          │                │                    │
-          ▼                ▼                    ▼
-   Music Assistant    Microphone         Sendspin Players
-      Server          (Web Audio)        (via protocol msg)
-```
+| Path | Purpose |
+|------|---------|
+| `src/calibration/syncPattern.ts` | Test pattern constants and WAV builder. No DOM or Node imports, because it is used by both the browser and `vite.config.ts` |
+| `src/calibration/MicCapture.ts` | AudioWorklet capture into a ring buffer, stamped with audio frame numbers |
+| `src/calibration/ClickAnalyzer.ts` | Matched-filter chirp detection and marker identification |
+| `src/calibration/syncSolver.ts` | Offsets and clock drift from chirp arrival times |
+| `src/calibration/GroupSyncSession.ts` | Grouping, muting, measuring and cleanup against MA |
+| `src/sync-push/DelayApplier.ts` | Reads, plans and saves the MA delay settings |
+| `src/ma-client/MAWebSocketClient.ts` | MA WebSocket client, sign-in, token reuse and reconnect |
+| `src/components/` | `ConnectionPanel`, `PlayerList`, `GroupCalibration` |
+| `src/store/` | Zustand stores for the connection and the screen phase |
+| `vite.config.ts` | Plugin that generates and serves `/sync-track.wav` |
 
-## File Organization
+## Music Assistant facts the code relies on
 
-### Core Modules
+Checked against MA 2.10.9. Re-check them after an MA upgrade.
 
-| Directory | Purpose | Key Files |
-|-----------|---------|-----------|
-| `src/ma-client/` | Music Assistant WebSocket connection | `MAWebSocketClient.ts` |
-| `src/calibration/` | Audio detection and offset calculation | `AudioDetector.ts`, `OffsetCalculator.ts` |
-| `src/sync-push/` | Push offset to players | `SyncOffsetPusher.ts` |
-| `src/store/` | Zustand state management | `useConnectionStore.ts`, `useCalibrationStore.ts` |
-| `src/components/` | React UI components | `CalibrationWizard.tsx`, `PlayerList.tsx` |
+- **Delay settings.** `sendspin_static_delay` (0 to 5000 ms) is raised when a player is heard late. `sync_adjust` (-500 to 500 ms) is positive for later and negative for earlier. A player that exposes its output through another protocol stores the setting on the parent player as `<id>||protocol||<key>`. `readDelaySetting()` looks for both forms and returns the exact key to save.
+- **Grouping.** `players/cmd/set_members` silently skips players that are not in the target's `can_group_with`, and redirects to the active group when the target is already a member of one. After adding members, check `synced_to` instead of trusting the call.
+- **One group at a time.** A player can only be in one group. Ad-hoc groups made by selecting several players in the MA app pull speakers away from the group GroupSync builds, so `clearExistingGroups()` ungroups them at the start. Groups with `type === 'group'` (Universal Group or sync-group players) are left alone.
+- **Universal Groups** stream to each member independently, so measured offsets wander. Native Sendspin groups gave about 0.3 ms of jitter in testing.
+- **Authentication.** MA 2.10 may require sign-in after reconnecting. The client keeps a token in `localStorage` under `ma_access_token`.
+- **Player state.** Some players, such as Bluetooth bridges, report a state other than "playing" while audible. That is a soft `warning` on `PlayerStatus`, not a `problem`.
 
-### Key Patterns
+## Conventions
 
-**WebSocket Messages** (Music Assistant API):
-```typescript
-// Send command
-ws.send(JSON.stringify({
-  message_id: Date.now(),
-  command: 'players/all',
-  args: {},
-}));
-
-// Receive response
-ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
-  if (msg.message_id === sentId) {
-    // Handle response
-  }
-};
-```
-
-**Audio Processing** (Web Audio API):
-```typescript
-// Microphone capture
-const stream = await navigator.mediaDevices.getUserMedia({
-  audio: { echoCancellation: false, sampleRate: 48000 }
-});
-const audioContext = new AudioContext({ sampleRate: 48000 });
-const source = audioContext.createMediaStreamSource(stream);
-```
-
-**State Management** (Zustand):
-```typescript
-const useConnectionStore = create<ConnectionState>((set) => ({
-  serverUrl: '',
-  connected: false,
-  players: [],
-  connect: async (url) => { /* ... */ },
-}));
-```
-
-## Common Tasks
-
-### Adding a New Player Command
-
-1. Add message type to `src/types/protocol.ts`
-2. Implement in `src/ma-client/MAWebSocketClient.ts`
-3. Call from component or store
-
-### Modifying Audio Detection
-
-1. Edit `src/calibration/AudioDetector.ts` for capture logic
-2. Edit `src/calibration/OffsetCalculator.ts` for algorithm
-3. Constants at top of files control thresholds
-
-### Adding UI Components
-
-1. Create in `src/components/`
-2. Use Tailwind classes for styling
-3. Mobile-first: design for small screens
+- TypeScript strict mode, React 19, Zustand, Tailwind. Mobile first.
+- Comments say why, not what.
+- Keep `syncPattern.ts` free of DOM and Node imports.
+- Before finishing, run `npm run build` (it runs `tsc -b` first) and `npm run lint`.
 
 ## Testing
 
-### Manual Testing Checklist
+There are no automated tests yet. Test on real speakers:
 
-- [ ] Connect to Music Assistant server
-- [ ] List available players
-- [ ] Play calibration track
-- [ ] Microphone capture works
-- [ ] Clicks detected visually
-- [ ] Offset calculated and displayed
-- [ ] Offset pushed to player
+- [ ] Connect to MA and list players
+- [ ] Start with two speakers and see both in the group
+- [ ] Measure the reference twice; the readings should agree within a few milliseconds
+- [ ] Measure another speaker; the jitter should be a few milliseconds or less
+- [ ] Review changes shows a sensible setting for each speaker
+- [ ] Apply, measure again, and see the check panel report the result
+- [ ] Stop actually stops the chirps on every speaker
+- [ ] Start again while an ad-hoc MA group exists; the group is cleared and a note is shown
 
-### Debug Mode
-
-Open browser console for logs. Key events:
-- `[MA] Connected to server`
-- `[MA] Players discovered: N`
-- `[Audio] Microphone stream started`
-- `[Calibration] Click detected at sample N`
-- `[Offset] Calculated: +X.Xms`
-
-## Dependencies
-
-### Runtime
-- `react` / `react-dom` - UI framework
-- `zustand` - State management
-
-### Development
-- `vite` - Build tool
-- `typescript` - Type checking
-- `tailwindcss` - Styling
-
-### Browser APIs Used
-- `WebSocket` - Server communication
-- `AudioContext` - Audio processing
-- `MediaDevices.getUserMedia()` - Microphone access
-- `AnalyserNode` - FFT for frequency detection
-
-## Related Repositories
-
-### Owned (direct changes)
-- `Z:\CodeProjects\windowsSpin` - Windows Sendspin player
-- `Z:\CodeProjects\SpinDroid` - Android Sendspin player
-
-### External (PRs needed)
-- `github.com/Sendspin/sendspin-js` - JS player library
-- `github.com/Sendspin/sendspin-cli` - Python CLI player
-
-## Protocol Extension
-
-New message type for pushing sync offset:
-
-```typescript
-// Client sends to player
-{
-  type: 'client/sync_offset',
-  payload: {
-    player_id: string,
-    offset_ms: number,  // +delay, -advance
-    source: 'groupsync',
-  }
-}
-
-// Player responds (optional)
-{
-  type: 'client/sync_offset_ack',
-  payload: {
-    player_id: string,
-    applied_offset_ms: number,
-  }
-}
-```
+Debug output is in the browser console, prefixed with `[GroupSync]`.
 
 ## Gotchas
 
-1. **HTTPS Required** - Microphone access requires secure context
-2. **48kHz Sample Rate** - Match Sendspin's audio format
-3. **Echo Cancellation OFF** - We need the raw audio signal
-4. **Mobile Browsers** - May need user gesture to start AudioContext
-5. **Cross-Origin** - MA server needs CORS headers for WebSocket
+1. **HTTPS is required.** Microphone access needs a secure context. The dev server uses a self-signed certificate (`@vitejs/plugin-basic-ssl`).
+2. **`wss://` from an HTTPS page.** `MAWebSocketClient.buildWebSocketUrl()` always uses `wss://` when the page is HTTPS, because browsers block insecure WebSockets from secure pages. The MA address entered must accept that.
+3. **Echo cancellation, noise suppression and auto gain are off** in `getUserMedia`. The chirps must reach the analyzer unprocessed.
+4. **The track is served by this app.** MA fetches `/sync-track.wav` from the machine running the dev server, so that machine must be reachable from the MA server.
+5. **Saving a delay can restart a player,** which stops the chirps. Tell the person to Stop and Start again.
+6. **Stop must stop every player.** A queue stop alone has been seen to leave chirps playing, so `finish()` also sends `players/cmd/stop` to each chosen player.

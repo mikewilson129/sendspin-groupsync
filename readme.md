@@ -1,174 +1,69 @@
 # GroupSync
 
-A mobile web application for synchronizing multiple Sendspin players in multi-room audio setups.
+A mobile web app that lines up the timing of Sendspin speakers in Music Assistant. It plays a chirp track on all your speakers as one group, listens to each speaker with your phone's microphone, and then saves the matching delay settings in Music Assistant.
 
-## Overview
+You walk to each speaker, hold the phone near it, and tap. The app mutes the others while it listens, so it hears one speaker at a time.
 
-GroupSync solves the challenge of achieving sample-accurate audio synchronization across multiple Sendspin speakers. Users walk around their listening space holding their phone near each speaker, and the app uses the device microphone to detect audio offset. The calculated offset is then pushed to each player to achieve perfect synchronization.
+## How it works
 
-## Features
+1. All chosen players are joined into one sync group led by a reference speaker, and a chirp track plays on that group. Every speaker plays the same stream, so any difference in when their chirps arrive is that speaker's real timing error.
+2. For each speaker, the app mutes the others and records about nine seconds of chirps through an AudioWorklet. Every sample is stamped with the audio hardware's frame counter, so the phone's own clock is the only clock that matters.
+3. A matched filter finds each chirp, and every fourth chirp sweeps down instead of up so the app can tell which chirp is which. That makes offsets of up to about two seconds unambiguous.
+4. A solver turns the arrival times into each speaker's offset from the reference. It also fits and removes the drift between the phone's clock and the stream.
+5. The review screen shows the Music Assistant setting each speaker would change (`sendspin_static_delay` or `sync_adjust`) and the new value. Nothing is saved until you tap Apply.
+6. After Apply, measure again. A panel tells you whether every speaker is now within 5 ms of the reference.
 
-- **Music Assistant Integration** - Connects via WebSocket to discover and control Sendspin players
-- **Automatic Offset Detection** - Uses microphone to measure audio delay at each speaker
-- **Cross-Correlation Algorithm** - Sub-millisecond accuracy offset calculation
-- **Protocol Extension** - Pushes offset to players via new `client/sync_offset` message
-- **Mobile-First Design** - Optimized for walking around with phone in hand
-
-## How It Works
-
-1. **Connect** - Enter your Music Assistant server URL
-2. **Select Players** - Choose which Sendspin players to synchronize
-3. **Calibrate** - Walk to each speaker, hold phone nearby while calibration track plays
-4. **Apply** - Push calculated offsets to all players
-
-### Calibration Process
-
-GroupSync plays a specially designed click track through all selected speakers simultaneously:
-- 20 seconds duration
-- Clicks at 1-second intervals
-- Rotating frequencies (1kHz, 2kHz, 4kHz, 8kHz) for reliable detection
-- Cross-correlation algorithm calculates precise offset
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| Framework | React 18 + TypeScript 5 |
-| Build | Vite |
-| Audio | Web Audio API |
-| State | Zustand |
-| UI | Tailwind CSS |
+See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for details.
 
 ## Requirements
 
-- Music Assistant server (v2.7+) with Sendspin player provider
-- One or more Sendspin-compatible players
-- Mobile device with microphone (iOS Safari or Android Chrome)
-- HTTPS connection (required for microphone access)
+- Music Assistant 2.10 or newer, with the speakers connected as Sendspin players. Tested with 2.10.9.
+- A computer on your network to run this app, and a phone with a microphone.
+- The page must be served over HTTPS, because browsers only allow microphone access on secure pages. The dev server does this with a self-signed certificate, so your phone will ask you to accept it once.
+- Because the page is HTTPS, the app always opens a `wss://` (secure) WebSocket to the Music Assistant address you enter. If the connection fails, check that address first.
+- Music Assistant fetches the test track from the computer running the app, so that computer must be reachable from the Music Assistant server. This worked in testing against the dev server's self-signed certificate.
 
-## Supported Players
-
-### Direct Support (protocol extension)
-- **windowsSpin** - Windows desktop player
-- **SpinDroid** - Android player
-
-### Via PR (pending)
-- **sendspin-js** - Web/Cast player
-- **sendspin-cli** - Python CLI player
-
-## Installation
+## Run it
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/groupsync.git
-cd groupsync
-
-# Install dependencies
 npm install
-
-# Start development server (HTTPS required for microphone)
-npm run dev
-
-# Build for production
-npm run build
-```
-
-## Usage
-
-### Development
-
-```bash
 npm run dev
 ```
 
-Opens at `https://localhost:5173` (HTTPS required for microphone access).
+Open the HTTPS address it prints on your phone, enter your Music Assistant address, and sign in if asked.
 
-### Production
+## Using it
 
-```bash
-npm run build
-npm run preview
-```
+1. Pick the players to calibrate and tap Start Calibration.
+2. Pick a reference speaker that you can get back to easily. The others are lined up to it.
+3. Tap Start. The chirp track plays on all the chosen speakers, and the track lasts 15 minutes.
+4. Measure the reference first, then each other speaker, holding the phone about a foot from it and keeping still for 12 seconds.
+5. Measure the reference again at the end for the best accuracy.
+6. Tap Review changes, check the new values, and tap Apply.
+7. Measure again to check the result.
 
-Deploy the `dist/` folder to any static hosting service (GitHub Pages, Vercel, Netlify).
+## Good to know
 
-## Configuration
+- **Only speakers that share a sync protocol can be grouped.** Sendspin players sync natively. Players of another ecosystem (for example a plain Chromecast speaker) cannot join that group, and measuring them through a Universal Group is unreliable because each member streams independently.
+- **Leftover groups cause trouble.** A group made by selecting players in the Music Assistant app can pull speakers away from the group the app builds. The app takes chosen speakers out of such groups when it starts. Tick "I already grouped these players in Music Assistant" to keep your own group instead.
+- **Bluetooth speakers read less steadily.** They can add hundreds of milliseconds of delay, which the app corrects, but their timing can wobble. If a reading is marked unsteady, measure again.
+- **Some players report "not playing" while audible.** The app shows this as a grey note, not an error.
+- **Players with no delay setting in Music Assistant** cannot be changed. The others are moved to match them, and the review screen lists what cannot be fixed.
 
-### Environment Variables
+## Project layout
 
-None required. Server URL is entered at runtime.
+| Path | Purpose |
+|------|---------|
+| `src/calibration/` | Test pattern, microphone capture, chirp detection, solver and the group session |
+| `src/sync-push/DelayApplier.ts` | Finds each player's delay setting in Music Assistant and saves new values |
+| `src/ma-client/` | Music Assistant WebSocket client with sign-in and automatic re-authentication |
+| `src/components/` | Connection screen, player list and the calibration screen |
+| `vite.config.ts` | Dev server plugin that generates and serves the chirp track |
 
-### Vite Config
+## Credits
 
-HTTPS is enabled by default for development to allow microphone access:
-
-```typescript
-// vite.config.ts
-export default defineConfig({
-  server: {
-    https: true,
-    host: true, // Allow mobile access
-  },
-});
-```
-
-## Protocol Extension
-
-GroupSync extends the Sendspin protocol with a new message type:
-
-```typescript
-interface SyncOffsetMessage {
-  type: 'client/sync_offset';
-  payload: {
-    player_id: string;
-    offset_ms: number;      // Positive = delay, negative = advance
-    source: 'groupsync';
-  };
-}
-```
-
-Players receive this message and adjust their internal sync delay accordingly.
-
-## Project Structure
-
-```
-groupsync/
-├── src/
-│   ├── main.tsx              # Entry point
-│   ├── App.tsx               # Main component
-│   ├── calibration/          # Audio detection & offset calculation
-│   ├── ma-client/            # Music Assistant WebSocket client
-│   ├── sync-push/            # Offset push mechanism
-│   ├── store/                # Zustand state management
-│   ├── components/           # React UI components
-│   └── types/                # TypeScript type definitions
-├── public/
-│   └── calibration-track.wav # Pre-generated click track
-└── docs/
-    ├── ARCHITECTURE.md       # Technical architecture
-    └── PROTOCOL.md           # Protocol extension details
-```
-
-## Related Projects
-
-- [Music Assistant](https://github.com/music-assistant) - Home music server
-- [Sendspin Protocol](https://www.sendspin-audio.com/spec/) - Synchronized audio streaming
-- [windowsSpin](https://github.com/yourusername/windowsSpin) - Windows Sendspin player
-- [SpinDroid](https://github.com/yourusername/SpinDroid) - Android Sendspin player
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+This is a fork of [chrisuthe/sendspin-groupsync](https://github.com/chrisuthe/sendspin-groupsync). The original idea and project structure are theirs. This version replaces the click-track calibration with relative chirp measurements and saves the real Music Assistant delay settings.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Music Assistant team for the excellent home audio server
-- Sendspin protocol designers for the synchronized audio specification
+See [LICENSE](LICENSE).
